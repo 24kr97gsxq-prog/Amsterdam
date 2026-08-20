@@ -10,17 +10,18 @@ const DISPLAY = "'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif";
 const BODY = "'Avenir Next','Segoe UI',system-ui,-apple-system,sans-serif";
 const MONO = "ui-monospace,'SF Mono',Menlo,Consolas,monospace";
 
-/* ── palettes per spec: WCAG-AAA contrast, dim-bar and sunlight legible ── */
+/* ── palettes: warm amber pass. WCAG-AAA contrast held in both modes;
+      Delft blue stays as the tile identity against warm surfaces ── */
 const PALETTES = {
   day: {
-    bg: "#F4F1EA", surface: "#FFFFFF", surface2: "#ECE7DB", text: "#0F172A",
-    dim: "#3F4A5C", rule: "#CFC8B8", accent: "#C2410C", onAccent: "#FFFFFF",
-    delft: "#2F5D8F", delftLo: "#1E3F63", delftHi: "#2F5D8F", warnBg: "#FBEFE7",
+    bg: "#F4EDE0", surface: "#FFFDF8", surface2: "#EDE3D0", text: "#241A0E",
+    dim: "#5C4C36", rule: "#D8CCB4", accent: "#8A3B0B", onAccent: "#FFFFFF",
+    delft: "#2F5D8F", delftLo: "#1E3F63", delftHi: "#2F5D8F", warnBg: "#F7E9D6",
   },
   night: {
-    bg: "#090D12", surface: "#161F28", surface2: "#1F2A36", text: "#F8FAFC",
-    dim: "#A7B4C4", rule: "#33404E", accent: "#F97316", onAccent: "#090D12",
-    delft: "#3E6FA8", delftLo: "#274A72", delftHi: "#89B0D8", warnBg: "#241A0E",
+    bg: "#0D0B07", surface: "#1C1610", surface2: "#272017", text: "#FAF6EC",
+    dim: "#BFB29A", rule: "#3E3527", accent: "#F59E0B", onAccent: "#1A1206",
+    delft: "#3E6FA8", delftLo: "#274A72", delftHi: "#8FB4DC", warnBg: "#261B0C",
   },
 };
 

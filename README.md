@@ -10,10 +10,12 @@ needed to deploy.
 - **Tile trail** — 9 tiles in a 5+4 grid (every touch target ≥48px), glazing
   Delft blue as stops are checked in; friends' dots appear on their tile
 - **Accessible theming** — Auto/Day/Night toggle in the header, follows
-  `prefers-color-scheme` on Auto. Light: `#F4F1EA`/`#FFFFFF`/`#0F172A`, burnt
-  amber `#C2410C`. Dark: `#090D12`/`#161F28`/`#F8FAFC`, high-vis amber
-  `#F97316`. Body text ≥17–18px throughout, designed for reading glasses in
-  dim bars and direct sun
+  `prefers-color-scheme` on Auto. Warm amber palette: Day is cream
+  `#F4EDE0` with warm charcoal `#241A0E` and burnt amber `#8A3B0B`; Night is
+  candlelit near-black `#0D0B07` with warm white `#FAF6EC` and glow amber
+  `#F59E0B`. Every text/background pair is verified ≥7:1 (WCAG AAA); body
+  text ≥17–18px throughout, designed for reading glasses in dim bars and
+  direct sun
 - **Group-size engine** — small (1–4) / medium (5–8) / large (9+), synced to
   the whole room. Medium adds +15 min dwell per stop, large +30, feeding the
   schedule guard
