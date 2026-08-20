@@ -1,147 +1,90 @@
-# De Kroegentocht
+# De Kroegentocht — v2.4.0-build.2026.08
 
-A walking tour of the nine oldest brown cafés in Amsterdam. One HTML file, no build
-step, no dependencies to install. Works offline once loaded.
+Amsterdam historical pub crawl web app. Zero budget: GitHub Pages (public repo)
+for hosting, Supabase free tier (anon key only, RLS on) for the shared board.
+Ships as one self-contained `index.html` — React is compiled in, no build step
+needed to deploy.
 
-- Tile strip across the top is the progress trail — tiles glaze blue as you check in
-- Inline SVG map, no tile server, so it renders with no signal
-- Optional GPS: measures distance to the next door and offers a check-in within 75 m
-- Optional group board: everyone walking together sees the same tiles
-- Drink log per stop (kind + one-line note) — stays on the phone, never synced
-- Schedule guard: warns if the pace will miss Wynand Fockink (21:00) or De Drie
-  Fleschjes (20:30), and if De Dokter is closed today or not yet open
-- Rally button: one tap puts a "meet at X" banner on everyone's screen for 30 min
-- Water/food nudge after stop five
-- End-of-crawl summary card rendered as a PNG to save or share
-- Haptic tick on check-in (where the phone supports it); screen stays awake while
-  GPS is on, so it doesn't sleep mid-navigation
+## Features
 
----
+- **Tile trail** — 9 tiles in a 5+4 grid (every touch target ≥48px), glazing
+  Delft blue as stops are checked in; friends' dots appear on their tile
+- **Accessible theming** — Auto/Day/Night toggle in the header, follows
+  `prefers-color-scheme` on Auto. Light: `#F4F1EA`/`#FFFFFF`/`#0F172A`, burnt
+  amber `#C2410C`. Dark: `#090D12`/`#161F28`/`#F8FAFC`, high-vis amber
+  `#F97316`. Body text ≥17–18px throughout, designed for reading glasses in
+  dim bars and direct sun
+- **Group-size engine** — small (1–4) / medium (5–8) / large (9+), synced to
+  the whole room. Medium adds +15 min dwell per stop, large +30, feeding the
+  schedule guard
+- **Schedule guard** — warns when the projected pace misses Wynand Fockink
+  (closes 21:00) or De Drie Fleschjes (20:30), and when De Dokter is closed
+  (Sun–Tue) or not yet open (before 16:00)
+- **Capacity alerts + quick-swaps** — In 't Aepjen (~20 seats) and De Dokter
+  (14 seats) flag medium/large groups; one tap swaps to De Pilsener Club,
+  Café De Zwart, or Café Nol (stop 8), for everyone in the room at once.
+  *Design note: the original spec proposed Hoppe as De Dokter's backup, but
+  Hoppe is already stop 6 — De Zwart, directly across the Spui, avoids
+  visiting the same bar twice.*
+- **Local culture tips** — jenever ritual card on stops 3–4 (hands behind
+  back, bow, sip from the rim), osseworst/cheese/bitterballen food notes,
+  Papeneiland apple pie, and a persistent cash/PIN payment reminder (foreign
+  credit cards are often refused)
+- **Everything from earlier versions** — GPS distance + auto check-in inside
+  75 m, opt-in position sharing, rally button, drink log (device-only, never
+  synced), water nudge after stop 5, end-of-crawl PNG summary card, haptics,
+  wake lock, offline-capable inline SVG map
+- **Version footer** on every screen
 
-## 1. Put it on GitHub Pages (2 minutes)
+## Deploy (GitHub Pages)
 
-1. Make a new **public** repository. (Pages needs a public repo on a free account —
-   private-repo Pages requires a paid plan.)
-2. Upload `index.html` to the root of the repo.
-3. **Settings → Pages → Build and deployment.** Source: *Deploy from a branch*.
-   Branch: `main`, folder: `/ (root)`. Save.
-4. Wait ~60 seconds. It's live at `https://YOURNAME.github.io/REPO/`.
+1. Public repo → upload `index.html` to the root
+2. Settings → Pages → Deploy from branch → `main` / root
+3. Live at `https://YOU.github.io/REPO/` in ~60 s
 
-That URL is HTTPS, which is what browser geolocation requires — so the GPS features
-work properly here, unlike inside an embedded preview frame.
+Solo mode works immediately with zero configuration.
 
-At this point the app is in **solo mode**: everything works, progress is saved on the
-phone in `localStorage` and survives closing the browser. Friends just won't appear.
-If that's all your friend needs, you're done.
+## Group board (Supabase free tier)
 
----
+1. Create a project at supabase.com, open the SQL Editor, run `supabase.sql`
+   (included next to this file)
+2. Settings → API → copy Project URL + anon public key
+3. Paste both into `window.KROEG_CONFIG` at the top of `index.html`
 
-## 2. Turn on the group board (10 minutes, free)
+Security model: anon key only — it is designed to be public. Row Level
+Security is enabled with policies constrained by CHECK clauses (room format,
+name length, coordinate bounds, value ranges), so writes are bounded but
+**anyone with the link can write rows**. That is the honest trade of a
+serverless zero-budget group app; fine for friends, not for anything
+sensitive. No service-role key exists anywhere in this code or repo.
 
-GitHub Pages is static hosting — no server, no database. So the shared board needs one
-external service. Supabase's free tier covers this many times over.
+Rooms: `?room=jonas-trip` isolates groups; the in-app "Copy invite link"
+button generates it. Group size and venue swaps are shared per room
+(last-writer-wins); drink logs never leave the phone.
 
-**Create the project**
+## Source layout
 
-1. Sign up at supabase.com, create a project (any region near Europe).
-2. Open the **SQL Editor** and run:
+- `src/useCrawlEngine.ts` — all state, Supabase sync, dwell/pace math, swaps
+- `src/CrawlDashboard.jsx` — themed accessible UI
+- `src/app.jsx` — entry point
+- `supabase.sql` — schema, RLS policies, realtime publication
+- Rebuild: `npx esbuild src/app.jsx --bundle --minify --format=iife
+  --loader:.ts=ts --jsx=automatic --outfile=build/bundle.js` then
+  `python3 assemble.py`
 
-```sql
-create table party (
-  id          text primary key,
-  room        text not null,
-  name        text,
-  color       text,
-  stop_idx    int,
-  done_count  int,
-  last_in     bigint,
-  seen        bigint,
-  lat         float8,
-  lon         float8,
-  rally_stop  int,
-  rally_ts    bigint
-);
+## Route
 
-create index party_room_seen on party (room, seen);
+| # | Bar | Est. | From last | Constraint |
+|---|-----|------|-----------|------------|
+| 1 | Café Karpershoek | 1606 | start | opens 10:00 |
+| 2 | In 't Aepjen ⇄ De Pilsener Club | 1519 | 400 m | ~20 seats |
+| 3 | Wynand Fockink | 1679 | 750 m | **closes 21:00** |
+| 4 | De Drie Fleschjes | 1650 | 450 m | **closes 20:30** |
+| 5 | Café de Dokter ⇄ Café De Zwart | 1798 | 700 m | Wed–Sat from 16:00 · 14 seats |
+| 6 | Hoppe | 1670 | 200 m | right-hand door |
+| 7 | Café Chris | 1624 | 950 m | opens 12:00 |
+| 8 | Café 't Smalle ⇄ Café Nol | 1786 | 400 m | food stop |
+| 9 | Café Papeneiland | 1642 | 600 m | apple pie · 10 min to Centraal |
 
-alter table party enable row level security;
-
-create policy "crawl board is open"
-  on party for all
-  to anon
-  using (true) with check (true);
-```
-
-3. **Settings → API.** Copy the *Project URL* and the *anon public* key.
-
-**Wire it up**
-
-Open `index.html`, find the `KROEG_CONFIG` block near the top (it's the only part
-meant to be edited), and fill in:
-
-```js
-window.KROEG_CONFIG = {
-  supabaseUrl: "https://abcdefgh.supabase.co",
-  supabaseKey: "eyJhbGciOi...",
-  room: "amsterdam"
-};
-```
-
-Commit. The board goes live within a minute.
-
-The anon key is designed to be published in client code — that's its purpose. But note
-the policy above is deliberately open: anyone who reads your JS could write rows to
-that table. For a pub crawl among friends that's the right trade. If it ever matters,
-add a shared secret column and check it in the policy.
-
----
-
-## 3. Rooms
-
-Each group is a `room`. The default comes from the config, but the URL wins:
-
-```
-https://yourname.github.io/kroeg/?room=jonas-trip
-```
-
-Anyone opening that link joins that group and nobody else's. The **Copy invite link**
-button inside the app produces exactly this URL. Room names are lowercased and
-stripped to letters, numbers and hyphens.
-
----
-
-## Notes
-
-- **Offline.** Once the page has loaded it keeps working with no signal — check-ins,
-  map, GPS distances all run locally. Only the group sync pauses, and it catches up
-  when data returns. Worth loading once on hotel wifi before heading out.
-- **Add to home screen.** On iOS Safari: Share → Add to Home Screen. It then opens
-  full-screen like an app.
-- **Location.** Nothing is transmitted unless *Sharing* is lit. GPS-off still gives you
-  the full tour with manual check-ins.
-- **Editing the route.** The `STOPS` array is baked into the bundle. To change stops,
-  edit `src/app.jsx` and rebuild:
-  `npx esbuild src/app.jsx --bundle --minify --format=iife --jsx=automatic --outfile=build/bundle.js`
-  then re-run `assemble.py`. Source is included alongside this file.
-- **Cost.** GitHub Pages free, Supabase free tier. A nine-stop crawl for six people is
-  a few hundred rows.
-
----
-
-## Route reference
-
-| # | Bar | Est. | From last | Notes |
-|---|-----|------|-----------|-------|
-| 1 | Café Karpershoek | 1606 | start | Opens 10:00 |
-| 2 | In 't Aepjen | 1519 | 400 m | Opens 14:00 |
-| 3 | Wynand Fockink | 1679 | 750 m | Closes 21:00 |
-| 4 | De Drie Fleschjes | 1650 | 450 m | Closes 20:30 |
-| 5 | Café de Dokter | 1798 | 700 m | **Wed–Sat, from 16:00 only** |
-| 6 | Hoppe | 1670 | 200 m | Right-hand door |
-| 7 | Café Chris | 1624 | 950 m | Opens 12:00 |
-| 8 | Café 't Smalle | 1786 | 400 m | Opens 14:00 |
-| 9 | Café Papeneiland | 1642 | 600 m | 10 min back to Centraal |
-
-4.45 km walking, about an hour of it. Stop 5 is the constraint — the whole route only
-works Wednesday to Saturday, starting early afternoon. Check opening hours before the
-trip; small bars change them.
+4.45 km. Friday plan: start 13:00–14:00, be through stop 4 by ~19:30 with a
+medium group, or the closing-time guard will start shouting.
