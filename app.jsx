@@ -91,6 +91,10 @@ const STOPS = [
 const ANCHOR = { lat: 52.3791, lon: 4.9003, name: "Centraal" };
 const TOTAL_M = STOPS.reduce((a, s) => a + (s.legFrom || 0), 0);
 const NEAR_M = 75;
+const DRINK_KINDS = ["Bier", "Jenever", "Anders"];
+const RALLY_TTL = 30 * 60 * 1000;
+/* closing times (minutes since midnight) for the stops that can cut the route short */
+const CLOSES = { 3: 21 * 60, 4: 20 * 60 + 30 };
 
 /* ── config (set in index.html) ────────────────────────────────────────── */
 const CFG = (typeof window !== "undefined" && window.KROEG_CONFIG) || {};
@@ -321,6 +325,11 @@ function App() {
   const [me, setMe] = useState(null);
   const [members, setMembers] = useState({});
   const [checkins, setCheckins] = useState({});
+  const [drinks, setDrinks] = useState({});
+  const [myRally, setMyRally] = useState(null);
+  const [rallyDismissed, setRallyDismissed] = useState(0);
+  const [waterOff, setWaterOff] = useState(false);
+  const [cardUrl, setCardUrl] = useState(null);
   const [viewing, setViewing] = useState(0);
   const [coords, setCoords] = useState(null);
   const [geoState, setGeoState] = useState("off");
@@ -335,20 +344,22 @@ function App() {
   const current = Math.min(doneList.length, 8);
   const startedAt = doneList.length ? Math.min(...Object.values(checkins)) : null;
 
-  stateRef.current = { me, checkins, current, coords, shareLoc };
+  stateRef.current = { me, checkins, current, coords, shareLoc, myRally };
 
   useEffect(() => {
     const saved = local.get("kroeg:me");
     if (saved?.id) {
       setMe({ id: saved.id, name: saved.name, color: saved.color });
       setCheckins(saved.checkins || {});
+      setDrinks(saved.drinks || {});
       setViewing(Math.min(Object.keys(saved.checkins || {}).length, 8));
     }
+    if (local.get("kroeg:water")) setWaterOff(true);
     setBooted(true);
   }, []);
 
   const beat = useCallback(async () => {
-    const { me: m, checkins: ci, current: cur, coords: co, shareLoc: sl } = stateRef.current;
+    const { me: m, checkins: ci, current: cur, coords: co, shareLoc: sl, myRally: ra } = stateRef.current;
     if (!m || !SYNC_ON) return;
     try {
       const ok = await sb.push({
@@ -358,6 +369,8 @@ function App() {
         seen: Date.now(),
         lat: sl && co ? +co.lat.toFixed(5) : null,
         lon: sl && co ? +co.lon.toFixed(5) : null,
+        rally_stop: ra ? ra.stop : null,
+        rally_ts: ra ? ra.ts : null,
       });
       const rows = await sb.pull(ROOM, Date.now() - 8 * 3600 * 1000);
       if (rows) {
@@ -367,6 +380,7 @@ function App() {
             id: r.id, name: r.name, color: r.color, at: r.stop_idx, done: r.done_count,
             last: r.last_in, seen: Number(r.seen),
             coords: r.lat != null && r.lon != null ? { lat: r.lat, lon: r.lon } : null,
+            rally: r.rally_ts ? { stop: r.rally_stop, ts: Number(r.rally_ts) } : null,
           };
         }
         setMembers(next);
@@ -382,7 +396,21 @@ function App() {
     return () => clearInterval(t);
   }, [me, beat]);
 
-  useEffect(() => { if (me) local.set("kroeg:me", { ...me, checkins }); }, [me, checkins]);
+  useEffect(() => { if (me) local.set("kroeg:me", { ...me, checkins, drinks }); }, [me, checkins, drinks]);
+
+  /* keep the screen awake while navigating with GPS on */
+  useEffect(() => {
+    if (geoState !== "on" || typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
+    let lock = null;
+    const grab = () => navigator.wakeLock.request("screen").then((l) => { lock = l; }).catch(() => {});
+    grab();
+    const vis = () => { if (document.visibilityState === "visible") grab(); };
+    document.addEventListener("visibilitychange", vis);
+    return () => {
+      document.removeEventListener("visibilitychange", vis);
+      try { lock && lock.release(); } catch {}
+    };
+  }, [geoState]);
 
   const startGeo = () => {
     if (!navigator.geolocation) { setGeoState("denied"); return; }
@@ -401,19 +429,85 @@ function App() {
 
   const join = (name, color) => {
     const m = { id: newId(), name, color };
-    setMe(m); setCheckins({}); setViewing(0);
-    local.set("kroeg:me", { ...m, checkins: {} });
+    setMe(m); setCheckins({}); setDrinks({}); setViewing(0);
+    local.set("kroeg:me", { ...m, checkins: {}, drinks: {} });
   };
   const checkIn = (n) => {
     setCheckins((prev) => (prev[n] ? prev : { ...prev, [n]: Date.now() }));
-    setViewing(Math.min(n, 8));
+    setViewing(n - 1); // stay here so the drink log is right under your thumb
+    try { navigator.vibrate && navigator.vibrate(30); } catch {}
     setTimeout(beat, 200);
   };
   const undo = (n) => setCheckins((prev) => { const c = { ...prev }; delete c[n]; return c; });
-  const resetAll = () => {
-    setCheckins({}); setViewing(0);
-    if (me) local.set("kroeg:me", { ...me, checkins: {} });
+  const setDrinkKind = (n, kind) =>
+    setDrinks((prev) => ({ ...prev, [n]: { ...(prev[n] || {}), kind: prev[n]?.kind === kind ? null : kind } }));
+  const setDrinkNote = (n, note) =>
+    setDrinks((prev) => ({ ...prev, [n]: { ...(prev[n] || {}), note: note.slice(0, 60) } }));
+  const callRally = () => {
+    setMyRally({ stop: viewing, ts: Date.now() });
+    try { navigator.vibrate && navigator.vibrate([30, 40, 30]); } catch {}
     setTimeout(beat, 200);
+  };
+  const resetAll = () => {
+    setCheckins({}); setDrinks({}); setMyRally(null); setViewing(0);
+    if (cardUrl) { try { URL.revokeObjectURL(cardUrl); } catch {} setCardUrl(null); }
+    if (me) local.set("kroeg:me", { ...me, checkins: {}, drinks: {} });
+    setTimeout(beat, 200);
+  };
+
+  /* end-of-crawl summary card */
+  const makeCard = async () => {
+    const cv = document.createElement("canvas");
+    cv.width = 1080; cv.height = 1080;
+    const g = cv.getContext("2d");
+    g.fillStyle = C.ink; g.fillRect(0, 0, 1080, 1080);
+    g.strokeStyle = C.rule; g.lineWidth = 2; g.strokeRect(40, 40, 1000, 1000);
+    // tile row
+    const tw = 88, gap = 14, x0 = (1080 - (9 * tw + 8 * gap)) / 2, y0 = 120;
+    const grad = g.createLinearGradient(0, y0, 0, y0 + tw);
+    grad.addColorStop(0, C.delft); grad.addColorStop(1, C.delftLo);
+    g.textAlign = "center";
+    STOPS.forEach((s, i) => {
+      const x = x0 + i * (tw + gap);
+      g.fillStyle = grad; g.fillRect(x, y0, tw, tw);
+      g.strokeStyle = C.delftHi; g.lineWidth = 1; g.strokeRect(x + .5, y0 + .5, tw - 1, tw - 1);
+      g.fillStyle = "#fff"; g.font = `600 42px ${MONO}`;
+      g.fillText("✓", x + tw / 2, y0 + tw / 2 + 15);
+    });
+    g.fillStyle = C.delftHi; g.font = `600 24px ${BODY}`;
+    g.fillText("N E G E N   B R U I N E   K R O E G E N", 540, 300);
+    g.fillStyle = C.bisque; g.font = `400 88px ${DISPLAY}`;
+    g.fillText("De Kroegentocht", 540, 400);
+    g.fillStyle = C.bisqueDim; g.font = `400 32px ${BODY}`;
+    g.fillText(new Date().toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" }), 540, 456);
+    // stats
+    const drinkCount = Object.values(drinks).filter((d) => d && d.kind).length;
+    const lines = [
+      `9 bars · ${(TOTAL_M / 1000).toFixed(1)} km on foot`,
+      startedAt ? `${elapsed(Math.max(...Object.values(checkins)) - startedAt)} door to door` : "",
+      drinkCount ? `${drinkCount} drinks logged` : "",
+    ].filter(Boolean);
+    g.fillStyle = C.bisque; g.font = `400 40px ${DISPLAY}`;
+    lines.forEach((l, i) => g.fillText(l, 540, 570 + i * 62));
+    // finishers
+    const finishers = [me.name, ...Object.values(members).filter((m) => m.id !== me.id && m.done === 9).map((m) => m.name)];
+    g.fillStyle = C.brass; g.font = `600 22px ${BODY}`;
+    g.fillText("V O L T O O I D", 540, 810);
+    g.fillStyle = C.bisque; g.font = `400 36px ${BODY}`;
+    g.fillText(finishers.join("  ·  "), 540, 862);
+    g.fillStyle = C.bisqueDim; g.font = `400 26px ${MONO}`;
+    g.fillText("1519 — 1798 · Centraal → Jordaan", 540, 970);
+    const blob = await new Promise((r) => cv.toBlob(r, "image/png"));
+    if (blob) setCardUrl(URL.createObjectURL(blob));
+  };
+  const shareCard = async () => {
+    try {
+      const blob = await (await fetch(cardUrl)).blob();
+      const file = new File([blob], "kroegentocht.png", { type: "image/png" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: "De Kroegentocht" });
+      }
+    } catch {}
   };
   const copyInvite = async () => {
     const url = `${location.origin}${location.pathname}?room=${ROOM}`;
@@ -430,6 +524,41 @@ function App() {
   const distToViewing = coords ? metersBetween(coords, stop) : null;
   const prompt2 = nearest && nearest.d < NEAR_M && !checkins[nearest.s.n] ? nearest : null;
   const dotsFor = (i) => Object.values(members).filter((m) => m.at === i).map((m) => m.color);
+
+  /* schedule check: the two closing times and De Dokter's opening window */
+  let warning = null;
+  {
+    const now = new Date();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const dow = now.getDay();
+    if (!checkins[5] && ![3, 4, 5, 6].includes(dow)) {
+      warning = "De Dokter is closed today — it runs Wednesday to Saturday only. Plan around it or accept eight of nine.";
+    } else if (!checkins[5] && current >= 4 && nowMin < 16 * 60) {
+      warning = "De Dokter doesn't open until 16:00 — you're ahead of it. Stretch a round at De Drie Fleschjes.";
+    } else if (doneList.length >= 2) {
+      const per = (Math.max(...Object.values(checkins)) - startedAt) / (doneList.length - 1);
+      for (const [nStr, closeMin] of Object.entries(CLOSES)) {
+        const n = +nStr;
+        if (checkins[n]) continue;
+        const away = n - doneList.length;
+        if (away <= 0) continue;
+        const eta = new Date(Date.now() + away * per);
+        const etaMin = eta.getHours() * 60 + eta.getMinutes();
+        if (etaMin > closeMin - 20 && etaMin < closeMin + 180) {
+          const hh = Math.floor(closeMin / 60), mm = String(closeMin % 60).padStart(2, "0");
+          warning = `At this pace you reach ${STOPS[n - 1].name} around ${clockOf(+eta)} — it closes at ${hh}:${mm}. Tighten up or reorder.`;
+          break;
+        }
+      }
+    }
+  }
+
+  /* most recent rally from anyone, still fresh, not dismissed */
+  const allRallies = [
+    ...(myRally ? [{ name: me.name, color: me.color, mine: true, ...myRally }] : []),
+    ...Object.values(members).filter((m) => m.id !== me.id && m.rally).map((m) => ({ name: m.name, color: m.color, mine: false, ...m.rally })),
+  ].filter((r) => Date.now() - r.ts < RALLY_TTL && r.ts > rallyDismissed);
+  const rally = allRallies.sort((a, b) => b.ts - a.ts)[0] || null;
 
   return (
     <div style={{ minHeight: "100vh", background: C.ink, fontFamily: BODY, color: C.bisque }}>
@@ -489,6 +618,42 @@ function App() {
               </>}
         </div>
 
+        {rally && (
+          <div style={{
+            padding: 14, marginBottom: 20, background: "#2E2610", border: `1px solid ${C.brass}`,
+            display: "flex", alignItems: "center", gap: 12,
+          }}>
+            <span style={{ width: 9, height: 9, borderRadius: 9, background: rally.color, flexShrink: 0 }} />
+            <div style={{ flex: 1, font: `14px/1.4 ${BODY}`, color: C.bisque }}>
+              {rally.mine ? "You called a rally at" : <><strong>{rally.name}</strong> calls everyone to</>}{" "}
+              <strong>{STOPS[Math.min(rally.stop, 8)].name}</strong>
+              <span style={{ color: C.bisqueDim }}> · {ago(rally.ts)}</span>
+            </div>
+            <button className="kt-link" style={{ color: C.brass }}
+              onClick={() => { setRallyDismissed(rally.ts); if (rally.mine) setMyRally(null); }}>
+              {rally.mine ? "Cancel" : "Got it"}
+            </button>
+          </div>
+        )}
+
+        {warning && (
+          <div style={{ padding: "13px 14px", marginBottom: 20, background: C.panel, borderLeft: `3px solid ${C.brass}`, font: `13px/1.5 ${BODY}`, color: C.bisque }}>
+            {warning}
+          </div>
+        )}
+
+        {doneList.length >= 5 && doneList.length < 9 && !waterOff && (
+          <div style={{ padding: "13px 14px", marginBottom: 20, background: C.panel, border: `1px dashed ${C.rule}`, display: "flex", gap: 12, alignItems: "center" }}>
+            <div style={{ flex: 1, font: `13px/1.5 ${BODY}`, color: C.bisqueDim }}>
+              Five down. Water now, and food at 't Smalle, is what keeps the last four fun.
+            </div>
+            <button className="kt-link" style={{ color: C.bisqueDim }}
+              onClick={() => { setWaterOff(true); local.set("kroeg:water", true); }}>
+              Noted
+            </button>
+          </div>
+        )}
+
         {prompt2 && (
           <div style={{ padding: 14, marginBottom: 20, background: C.delftLo, border: `1px solid ${C.delft}`, display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{ flex: 1, font: `14px/1.4 ${BODY}`, color: "#fff" }}>
@@ -521,6 +686,36 @@ function App() {
             <div style={{ font: `400 14px/1.5 ${BODY}`, color: C.bisque }}>{stop.order}</div>
             <div style={{ font: `12px/1.5 ${MONO}`, color: stop.pin ? C.brass : C.bisqueDim, marginTop: 4 }}>{stop.hours}</div>
           </div>
+
+          {checkins[stop.n] && (
+            <div style={{ marginBottom: 16, paddingTop: 12, borderTop: `1px solid ${C.rule}` }}>
+              <Eyebrow>What you had here</Eyebrow>
+              <div style={{ display: "flex", gap: 8, margin: "10px 0" }}>
+                {DRINK_KINDS.map((k) => {
+                  const on = drinks[stop.n]?.kind === k;
+                  return (
+                    <button key={k} onClick={() => setDrinkKind(stop.n, k)}
+                      style={{
+                        flex: 1, padding: "9px 6px", cursor: "pointer", borderRadius: 2,
+                        background: on ? C.delft : "transparent",
+                        border: `1px solid ${on ? C.delft : C.rule}`,
+                        color: on ? "#fff" : C.bisqueDim, font: `600 11px ${BODY}`,
+                        letterSpacing: ".1em", textTransform: "uppercase",
+                      }}>
+                      {k}
+                    </button>
+                  );
+                })}
+              </div>
+              <input value={drinks[stop.n]?.note || ""} onChange={(e) => setDrinkNote(stop.n, e.target.value)}
+                placeholder="One line for tomorrow-you" maxLength={60}
+                style={{
+                  width: "100%", boxSizing: "border-box", padding: "10px 12px",
+                  background: C.ink, border: `1px solid ${C.rule}`, color: C.bisque,
+                  font: `400 14px ${BODY}`, outline: "none", borderRadius: 2,
+                }} />
+            </div>
+          )}
 
           <div style={{ display: "flex", gap: 8 }}>
             {checkins[stop.n]
@@ -568,7 +763,34 @@ function App() {
               keys at the top of index.html — see the README.
             </p>
           )}
+          {SYNC_ON && others.length > 0 && (
+            <button onClick={callRally} style={{ ...btn(C.panel2, C.brass, C.rule), width: "100%", marginTop: 12 }}>
+              Rally everyone at {STOPS[viewing].name}
+            </button>
+          )}
         </section>
+
+        {doneList.length === 9 && (
+          <section style={{ marginBottom: 26, background: C.panel, border: `1px solid ${C.brass}`, padding: 16 }}>
+            <Eyebrow color={C.brass}>Voltooid — all nine</Eyebrow>
+            <p style={{ font: `400 15px/1.5 ${BODY}`, margin: "10px 0 14px" }}>
+              {startedAt ? `${elapsed(Math.max(...Object.values(checkins)) - startedAt)} from the sand floor at Karpershoek to apple pie at Papeneiland.` : "The full route, done."}
+            </p>
+            {cardUrl ? (
+              <>
+                <img src={cardUrl} alt="Summary card of the finished crawl" style={{ width: "100%", display: "block", marginBottom: 10 }} />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <a href={cardUrl} download="kroegentocht.png" style={{ ...btn(C.delft, "#fff"), textDecoration: "none", textAlign: "center" }}>Save</a>
+                  {typeof navigator !== "undefined" && navigator.canShare && (
+                    <button onClick={shareCard} style={btn(C.panel2, C.bisque, C.rule)}>Share</button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <button onClick={makeCard} style={{ ...btn(C.brass, C.ink), width: "100%" }}>Make the summary card</button>
+            )}
+          </section>
+        )}
 
         {startedAt && doneList.length >= 3 && (
           <div style={{ font: `12px/1.6 ${MONO}`, color: C.bisqueDim, borderTop: `1px solid ${C.rule}`, paddingTop: 14, marginBottom: 14 }}>

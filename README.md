@@ -7,6 +7,14 @@ step, no dependencies to install. Works offline once loaded.
 - Inline SVG map, no tile server, so it renders with no signal
 - Optional GPS: measures distance to the next door and offers a check-in within 75 m
 - Optional group board: everyone walking together sees the same tiles
+- Drink log per stop (kind + one-line note) — stays on the phone, never synced
+- Schedule guard: warns if the pace will miss Wynand Fockink (21:00) or De Drie
+  Fleschjes (20:30), and if De Dokter is closed today or not yet open
+- Rally button: one tap puts a "meet at X" banner on everyone's screen for 30 min
+- Water/food nudge after stop five
+- End-of-crawl summary card rendered as a PNG to save or share
+- Haptic tick on check-in (where the phone supports it); screen stays awake while
+  GPS is on, so it doesn't sleep mid-navigation
 
 ---
 
@@ -49,7 +57,9 @@ create table party (
   last_in     bigint,
   seen        bigint,
   lat         float8,
-  lon         float8
+  lon         float8,
+  rally_stop  int,
+  rally_ts    bigint
 );
 
 create index party_room_seen on party (room, seen);
